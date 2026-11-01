@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -26,12 +27,24 @@ INDEX_NAME = "parameters_vector_index"
 TOP_K = 8
 NOT_FOUND_ANSWER = "No encontré un parámetro que responda a tu consulta."
 
+# Versión del prompt: cambiarla invalida las respuestas guardadas en caché.
+PROMPT_VERSION = "2"
+
 SELECTOR_SYSTEM_PROMPT = """Eres un asistente de soporte técnico para configurar el dispositivo Teltonika FMC130.
 Recibirás una pregunta del usuario en español y una lista numerada de candidatos tomados de la documentación oficial
 (parámetros y sus opciones de valor).
-Tu tarea: elegir el número del candidato que responde exactamente a la pregunta, considerando la opción de valor correcta.
-- Si ningún candidato corresponde a la pregunta, responde con 0.
-- No inventes parámetros ni valores que no estén en la lista.
+Tu tarea: elegir el número del candidato que responde a la pregunta, con la opción de valor correcta.
+
+Criterios de elección (aplícalos siempre en el mismo orden):
+1. Si la pregunta pide activar, habilitar o configurar una función (por ejemplo, detección de choque), elige el
+   parámetro principal de esa función: el de nombre "Configuración de escenario", "Prioridad" o similar que controla
+   la función completa. No elijas sub-parámetros de detalle como umbrales, duraciones, trazas o filtros.
+2. Si hay varias opciones del mismo parámetro, elige la opción que corresponde a la acción pedida:
+   "activar" o "habilitar" corresponde a la opción de habilitar más básica (la de menor prioridad distinta de Disable);
+   "desactivar" corresponde a la opción Disable/Disabled con valor 0.
+3. Si dos candidatos empatan, elige el de menor número de candidato.
+4. Si ningún candidato corresponde a la pregunta, responde con 0.
+No inventes parámetros ni valores que no estén en la lista.
 Responde ÚNICAMENTE con un objeto JSON con esta forma: {"candidate": <número>}"""
 
 
@@ -214,7 +227,55 @@ def format_answer(c: Candidate) -> str:
     return f"ParameterID: {c.parameter_id} Value: {code}"
 
 
+_CACHE_COLLECTION = "answer_cache"
+
+
+def normalize_question(question: str) -> str:
+    """Clave de caché: minúsculas, sin tildes, sin signos, espacios colapsados."""
+    decomposed = unicodedata.normalize("NFKD", question.lower())
+    no_accents = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    words = re.findall(r"[a-z0-9]+", no_accents.replace("ñ", "n"))
+    return " ".join(words)
+
+
+def _cache_collection():
+    return _collection().database[_CACHE_COLLECTION]
+
+
+def _cache_key(question: str) -> str:
+    return f"v{PROMPT_VERSION}:{normalize_question(question)}"
+
+
+def _cache_get(question: str) -> dict[str, Any] | None:
+    try:
+        doc = _cache_collection().find_one({"_id": _cache_key(question)}, {"_id": 0, "result": 1})
+    except Exception:  # la caché es opcional: si falla, se responde sin ella
+        return None
+    return doc["result"] if doc else None
+
+
+def _cache_put(question: str, result: dict[str, Any]) -> None:
+    try:
+        _cache_collection().replace_one(
+            {"_id": _cache_key(question)},
+            {"_id": _cache_key(question), "question": question, "result": result},
+            upsert=True,
+        )
+    except Exception:
+        pass
+
+
 def answer_question(question: str) -> dict[str, Any]:
+    """Responde con caché: la misma pregunta (normalizada) siempre devuelve la misma respuesta."""
+    cached = _cache_get(question)
+    if cached is not None:
+        return cached
+    result = _answer_uncached(question)
+    _cache_put(question, result)
+    return result
+
+
+def _answer_uncached(question: str) -> dict[str, Any]:
     vector = embed_query(question)
     candidates = vector_search(vector, TOP_K)
     if not candidates:
