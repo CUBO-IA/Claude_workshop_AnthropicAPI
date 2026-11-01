@@ -1,0 +1,58 @@
+services:
+  mongodb:
+    image: mongodb/mongodb-atlas-local:latest
+    container_name: fmc130-mongodb
+    ports:
+      - "127.0.0.1:${MONGODB_HOST_PORT:-27040}:27017"
+    environment:
+      MONGODB_INITDB_ROOT_USERNAME: ${MONGODB_ROOT_USERNAME:-admin}
+      MONGODB_INITDB_ROOT_PASSWORD: ${MONGODB_ROOT_PASSWORD:-change-me-dev}
+    volumes:
+      - mongo-data:/data/db
+      - mongo-config:/data/configdb
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  backend:
+    build:
+      context: ./backend
+    container_name: fmc130-backend
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Dentro de la red de compose el host es el nombre del servicio, no localhost.
+      MONGODB_URI: mongodb://${MONGODB_ROOT_USERNAME:-admin}:${MONGODB_ROOT_PASSWORD}@mongodb:27017/?authSource=admin&directConnection=true
+      CORS_ORIGINS: https://localhost:${FRONTEND_HOST_PORT:-4443}
+    ports:
+      - "127.0.0.1:${BACKEND_HOST_PORT:-8453}:8443"
+    volumes:
+      - ./certs:/certs:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import ssl,urllib.request as u; u.urlopen('https://localhost:8443/api/health', context=ssl._create_unverified_context(), timeout=5)"]
+      interval: 15s
+      timeout: 8s
+      retries: 5
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: fmc130-frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${FRONTEND_HOST_PORT:-4443}:8443"
+    volumes:
+      - ./certs:/certs:ro
+    restart: unless-stopped
+
+volumes:
+  mongo-data:
+  mongo-config:

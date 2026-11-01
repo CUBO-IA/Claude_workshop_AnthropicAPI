@@ -24,3 +24,12 @@ yarn-error.log*
 # OS files
 .DS_Store
 Thumbs.db
+
+# Python virtualenv
+.venv/
+
+# TLS certificates (local/dev)
+certs/
+
+# Python cache
+__pycache__/
