@@ -16,11 +16,15 @@ services:
   mongodb:
     image: mongodb/mongodb-atlas-local:latest
     container_name: fmc130-mongodb
+    # El replica set guarda su propio host (<hostname>:27017). Se fija para que sobreviva a recreaciones del contenedor.
+    hostname: 8675e82b6b88
     networks:
       fmc130-net:
         ipv4_address: 172.30.0.5
+    # Los puertos se publican en este servicio porque el proxy TLS comparte su pila de red.
     ports:
       - "127.0.0.1:${MONGODB_HOST_PORT:-27040}:27017"
+      - "127.0.0.1:${MONGODB_TLS_HOST_PORT:-27041}:27443"
     environment:
       MONGODB_INITDB_ROOT_USERNAME: ${MONGODB_ROOT_USERNAME:-admin}
       MONGODB_INITDB_ROOT_PASSWORD: ${MONGODB_ROOT_PASSWORD:?Define MONGODB_ROOT_PASSWORD en .env}
@@ -34,6 +38,21 @@ services:
       retries: 12
     restart: unless-stopped
 
+  # Termina TLS para MongoDB: escucha en 27443 dentro de la red de mongodb y reenvía a su mongod en texto plano (loopback).
+  mongo-tls:
+    <<: *hardening
+    image: nginxinc/nginx-unprivileged:1.27-alpine
+    container_name: fmc130-mongo-tls
+    network_mode: "service:mongodb"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    tmpfs:
+      - /tmp
+    volumes:
+      - ./mongo-proxy/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/certs:ro
+
   backend:
     <<: *hardening
     build:
@@ -46,7 +65,8 @@ services:
       - .env
     environment:
       # Dentro de la red de compose el host es el nombre del servicio, no localhost.
-      MONGODB_URI: mongodb://${MONGODB_ROOT_USERNAME:-admin}:${MONGODB_ROOT_PASSWORD}@172.30.0.5:27017/?authSource=admin&directConnection=true
+      # TLS hacia el proxy; el certificado se valida contra la CA (autofirmada en desarrollo).
+      MONGODB_URI: mongodb://${MONGODB_ROOT_USERNAME:-admin}:${MONGODB_ROOT_PASSWORD}@172.30.0.5:27443/?authSource=admin&directConnection=true&tls=true&tlsCAFile=/certs/mongo-cert.pem
       CORS_ORIGINS: https://localhost:${FRONTEND_HOST_PORT:-4443}
       TRUSTED_PROXIES: 172.30.0.10/32
       RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-100}

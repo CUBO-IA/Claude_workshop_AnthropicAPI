@@ -52,7 +52,7 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt pytest
 
 # 4. Base de datos (datos ya generados en data/; regenerar solo si cambia la wiki)
-docker compose up -d mongodb
+docker compose up -d mongodb mongo-tls
 .venv/bin/python scripts/extract_fmc130.py     # opcional: regenera data/
 .venv/bin/python scripts/translate_fmc130.py   # opcional: usa caché si existe
 .venv/bin/python scripts/load_mongo.py
@@ -122,7 +122,8 @@ Las pruebas de aceptación respetan `Retry-After`.
 
 **Limitaciones conocidas**
 
-- **MongoDB sin TLS:** la conexión entre contenedores es TCP sin cifrar, aunque la red es interna y el puerto del host solo escucha en `127.0.0.1`.
+- **MongoDB: TLS en el proxy, no en `mongod`.** La imagen Atlas Local no admite opciones TLS en `mongod`. El contenedor `mongo-tls` (nginx `stream`) termina TLS en el puerto 27443 y reenvía a `127.0.0.1:27017` dentro de la misma pila de red. El backend valida el certificado con `tlsCAFile`. El tramo proxy → `mongod` sigue sin cifrar, pero solo dentro del contenedor de MongoDB.
+- **Replica set:** el `hostname` de `mongodb` está fijado (`8675e82b6b88`) porque el replica set guarda ese host. Si se cambia, hay que reconfigurar el replica set.
 - **HTTPS con certificado autofirmado** (solo desarrollo). En producción, certificado de CA y secretos fuera de `.env`.
 - **Permisos de la clave:** `certs/key.pem` tiene permisos 644 para que el usuario del contenedor pueda leerla.
 - **Temperatura 0:** no es posible con los modelos Claude 5. La consistencia se logra con la caché de respuestas y el prompt delimitado.
