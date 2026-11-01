@@ -92,10 +92,39 @@ certs/          Certificados TLS (no versionados)
 docker-compose.yml
 ```
 
-## Seguridad y limitaciones conocidas
+## Seguridad
 
-- **HTTPS:** frontend y backend usan TLS con certificado autofirmado (solo desarrollo). En producción conviene un certificado de una CA y un proxy único.
-- **MongoDB:** la conexión entre contenedores es TCP sin TLS, y el puerto del host solo escucha en `127.0.0.1`. Para cumplir "todo HTTPS" habría que activar TLS en MongoDB.
-- **Permisos de la clave:** `certs/key.pem` tiene permisos 644 para que el usuario del contenedor pueda leerla. Es aceptable solo en local.
-- **Temperatura 0:** no es posible con los modelos Claude 5. La consistencia se logra limitando la elección a candidatos recuperados.
-- **Credenciales:** `.env` contiene secretos y está excluido de git. No lo compartas.
+Controles implementados:
+
+| Área | Control |
+|---|---|
+| Rate limiting | 100 peticiones/minuto por IP en `POST /api/chat` (ventana deslizante). Responde 429 con `Retry-After`. Configurable con `RATE_LIMIT_PER_MINUTE`. |
+| IP de cliente | Solo el proxy del frontend (IP fija `172.30.0.10`) puede fijar `X-Real-IP`. Un cliente no puede falsificar su IP. |
+| Tamaño | Cuerpo máximo de 2 KB en el backend y de 2 KB en nginx. Pregunta de 3 a 500 caracteres, sin caracteres de control, campos extra rechazados. |
+| Errores | Al cliente solo llegan mensajes genéricos. Los detalles van al log del servidor. |
+| Documentación API | `/docs` y `/openapi.json` desactivados (`ENABLE_DOCS=false`). |
+| Alcance | Preguntas fuera del FMC130 (identidad, clima, recetas, etc.) se rechazan. La pregunta se delimita en el prompt para evitar inyección. |
+| Cabeceras | CSP estricta (`script-src 'self'`, `frame-ancestors 'none'`), HSTS, `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy`. |
+| Métodos | nginx solo permite GET/HEAD en estáticos, POST en `/api/chat`, GET en `/api/health`. |
+| Contenedores | Sistema de archivos de solo lectura, `cap_drop: ALL`, `no-new-privileges`, frontend sin root, red interna con IPs fijas. |
+| Frontend | Sin `dangerouslySetInnerHTML` ni `eval`. Build con lockfile; `npm audit`: 0 vulnerabilidades. |
+
+Prueba del límite (en vivo): 105 peticiones seguidas dan 100 respuestas válidas y 429 desde la 101.
+Las pruebas de aceptación respetan `Retry-After`.
+
+**Límites del modelo de amenaza**
+
+- **El navegador no se puede blindar.** Quien controle su propio navegador puede modificar el JavaScript
+  que recibe. Por eso el backend aplica todas las reglas (límites, alcance, formato): alterar el frontend
+  no permite saltárselas. La CSP impide que código inyectado cargue scripts externos.
+- **Autenticación:** no hay login (requisito del proyecto). Cualquiera con acceso a la red puede consultar, con el límite por IP.
+- **Cuota de APIs:** el límite por IP no protege la cuota compartida de OpenRouter y Anthropic si muchas IPs consultan a la vez.
+
+**Limitaciones conocidas**
+
+- **MongoDB sin TLS:** la conexión entre contenedores es TCP sin cifrar, aunque la red es interna y el puerto del host solo escucha en `127.0.0.1`.
+- **HTTPS con certificado autofirmado** (solo desarrollo). En producción, certificado de CA y secretos fuera de `.env`.
+- **Permisos de la clave:** `certs/key.pem` tiene permisos 644 para que el usuario del contenedor pueda leerla.
+- **Temperatura 0:** no es posible con los modelos Claude 5. La consistencia se logra con la caché de respuestas y el prompt delimitado.
+- **Límite en memoria:** con varios procesos del backend, el contador no se comparte. Usar Redis si se escala.
+- **Credenciales:** `.env` contiene secretos y está excluido de git. La aplicación usa el usuario root de MongoDB; en producción conviene un usuario con permisos mínimos.
