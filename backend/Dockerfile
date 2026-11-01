@@ -9,6 +9,13 @@ WORKDIR /srv/backend
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
+# Modelo de embeddings horneado en la imagen (el contenedor tiene el sistema de archivos de solo lectura).
+ARG EMBEDDING_MODEL=intfloat/multilingual-e5-large
+ENV FASTEMBED_CACHE_PATH=/opt/models \
+    EMBEDDING_MODEL=${EMBEDDING_MODEL}
+RUN python -c "import os; from fastembed import TextEmbedding; TextEmbedding(model_name=os.environ['EMBEDDING_MODEL'], cache_dir=os.environ['FASTEMBED_CACHE_PATH'])" \
+    && chmod -R a+rX /opt/models
+
 COPY app ./app
 
 RUN useradd --create-home --uid 10001 appuser

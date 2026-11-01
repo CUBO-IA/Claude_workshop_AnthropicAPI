@@ -1,4 +1,4 @@
-"""Recuperación: embedding de la consulta (OpenRouter) + $vectorSearch en MongoDB.
+"""Recuperación: embedding local de la consulta + $vectorSearch en MongoDB.
 
 Uso como prueba:
     .venv/bin/python scripts/retrieval.py "¿Cómo configuro la fuente de movimiento a ignición?"
@@ -12,10 +12,12 @@ from functools import lru_cache
 from pymongo import MongoClient
 
 from config import ROOT, load_env
-from embed_mongo import embed_batch, INDEX_NAME
+from embed_mongo import INDEX_NAME
+
+sys.path.insert(0, str(ROOT / "backend"))
+from app import embeddings  # noqa: E402
 
 _env = load_env()
-MODEL = _env.get("OPENROUTER_EMBEDDING_MODEL", "nvidia/nemotron-3.5-embed-1b:free")
 
 
 @lru_cache(maxsize=1)
@@ -25,7 +27,7 @@ def _collection():
 
 
 def search(query: str, k: int = 5) -> list[dict]:
-    vector = embed_batch(_env, MODEL, [query])[0]
+    vector = embeddings.embed_query(query)
     pipeline = [
         {
             "$vectorSearch": {

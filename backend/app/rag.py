@@ -21,11 +21,11 @@ from pymongo import MongoClient
 
 import logging
 
+from . import embeddings
 from .config import settings
 
 log = logging.getLogger("fmc130.rag")
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/embeddings"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 INDEX_NAME = "parameters_vector_index"
 TOP_K = 8
@@ -118,23 +118,10 @@ def _post_json(url: str, headers: dict[str, str], payload: dict[str, Any], timeo
 
 
 def embed_query(text: str) -> list[float]:
-    if not settings.openrouter_api_key:
-        raise RagError("OPENROUTER_API_KEY no configurada", status_code=503)
-    headers = {
-        "Authorization": f"Bearer {settings.openrouter_api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": settings.openrouter_site_url,
-        "X-OpenRouter-Title": settings.openrouter_site_name,
-    }
     try:
-        body = _post_json(
-            OPENROUTER_URL,
-            headers,
-            {"model": settings.openrouter_embedding_model, "input": [text], "encoding_format": "float"},
-        )
-    except (urllib.error.URLError, RuntimeError, urllib.error.HTTPError) as exc:
+        return embeddings.embed_query(text)
+    except Exception as exc:  # modelo no cargado, error de ONNX, etc.
         raise RagError(f"Error al calcular el embedding: {exc}", status_code=503) from exc
-    return body["data"][0]["embedding"]
 
 
 def vector_search(vector: list[float], k: int = TOP_K) -> list[Candidate]:
